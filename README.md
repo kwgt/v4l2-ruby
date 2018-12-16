@@ -23,7 +23,7 @@ Or install it yourself as:
 #! /usr/bin/env ruby
 # coding: utf-8
 
-require './v4l2.so'
+require 'v4l2'
 require 'json'
 require 'pp'
 
