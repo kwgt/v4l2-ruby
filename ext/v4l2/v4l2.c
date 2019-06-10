@@ -16,6 +16,7 @@
 #define N(x)                            (sizeof((x))/sizeof(*(x)))
 
 extern rb_encoding* rb_utf8_encoding(void);
+extern rb_encoding* rb_default_internal_encoding(void);
 
 static VALUE module;
 static VALUE camera_klass;
@@ -153,9 +154,12 @@ get_menu_list(camera_t* ptr, int ctrl, int min, int max)
     err = camera_get_menu_item(ptr, ctrl, i, &item);
     if (!err) {
       VALUE tmp;
+      VALUE name;
 
-      tmp = rb_obj_alloc(menu_item_klass);
-      rb_ivar_set(tmp, id_iv_name, rb_str_new2((const char*)item.name));
+      tmp  = rb_obj_alloc(menu_item_klass);
+      name = rb_enc_str_new_cstr((const char*)item.name, rb_utf8_encoding());
+
+      rb_ivar_set(tmp, id_iv_name, name);
       rb_ivar_set(tmp, id_iv_index, INT2FIX(item.index));
       
       rb_ary_push(ret, tmp);
@@ -178,9 +182,12 @@ get_int_menu_list(camera_t* ptr, int ctrl, int min, int max)
     err = camera_get_menu_item(ptr, ctrl, i, &item);
     if (!err) {
       VALUE tmp;
+      VALUE name;
 
-      tmp = rb_obj_alloc(menu_item_klass);
-      rb_ivar_set(tmp, id_iv_name, rb_sprintf("%lld", item.value));
+      tmp  = rb_obj_alloc(menu_item_klass);
+      name = rb_enc_sprintf(rb_utf8_encoding(), "%lld", item.value);
+
+      rb_ivar_set(tmp, id_iv_name, name);
       rb_ivar_set(tmp, id_iv_index, INT2FIX(item.index));
       
       rb_ary_push(ret, tmp);
@@ -194,6 +201,7 @@ static VALUE
 get_control_info(camera_t* ptr, int ctrl)
 {
   VALUE ret;
+  VALUE name;
   int err; 
   struct v4l2_queryctrl info;
 
@@ -202,8 +210,11 @@ get_control_info(camera_t* ptr, int ctrl)
   if (!err) {
       switch (info.type) {
       case V4L2_CTRL_TYPE_INTEGER:
-        ret = rb_obj_alloc(integer_klass);
-        rb_ivar_set(ret, id_iv_name, rb_str_new2((const char*)info.name));
+        ret  = rb_obj_alloc(integer_klass);
+        name = rb_enc_str_new_cstr((const char*)info.name,
+                                   rb_utf8_encoding());
+
+        rb_ivar_set(ret, id_iv_name, name);
         rb_ivar_set(ret, id_iv_id, INT2NUM(info.id));
         rb_ivar_set(ret, id_iv_min, INT2FIX(info.minimum));
         rb_ivar_set(ret, id_iv_max, INT2FIX(info.maximum));
@@ -212,15 +223,21 @@ get_control_info(camera_t* ptr, int ctrl)
         break;
 
       case V4L2_CTRL_TYPE_BOOLEAN:
-        ret = rb_obj_alloc(boolean_klass);
-        rb_ivar_set(ret, id_iv_name, rb_str_new2((const char*)info.name));
+        ret  = rb_obj_alloc(boolean_klass);
+        name = rb_enc_str_new_cstr((const char*)info.name,
+                                   rb_utf8_encoding());
+
+        rb_ivar_set(ret, id_iv_name, name);
         rb_ivar_set(ret, id_iv_id, INT2NUM(info.id));
         rb_ivar_set(ret, id_iv_default, (info.default_value)? Qtrue: Qfalse);
         break;
 
       case V4L2_CTRL_TYPE_MENU:
-        ret = rb_obj_alloc(menu_klass);
-        rb_ivar_set(ret, id_iv_name, rb_str_new2((const char*)info.name));
+        ret  = rb_obj_alloc(menu_klass);
+        name = rb_enc_str_new_cstr((const char*)info.name,
+                                   rb_utf8_encoding());
+
+        rb_ivar_set(ret, id_iv_name, name);
         rb_ivar_set(ret, id_iv_id, INT2NUM(info.id));
         rb_ivar_set(ret, id_iv_default, INT2FIX(info.default_value));
         rb_ivar_set(ret, id_iv_items,
@@ -228,8 +245,11 @@ get_control_info(camera_t* ptr, int ctrl)
         break;
 
       case V4L2_CTRL_TYPE_INTEGER_MENU:
-        ret = rb_obj_alloc(menu_klass);
-        rb_ivar_set(ret, id_iv_name, rb_str_new2((const char*)info.name));
+        ret  = rb_obj_alloc(menu_klass);
+        name = rb_enc_str_new_cstr((const char*)info.name,
+                                   rb_utf8_encoding());
+
+        rb_ivar_set(ret, id_iv_name, name);
         rb_ivar_set(ret, id_iv_id, INT2NUM(info.id));
         rb_ivar_set(ret, id_iv_default, INT2FIX(info.default_value));
         rb_ivar_set(ret, id_iv_items,
@@ -352,6 +372,7 @@ rb_camera_get_support_formats(VALUE self)
 
   VALUE fmt;
   VALUE fcc;
+  VALUE str;
 
   Data_Get_Struct(self, camera_t, ptr);
 
@@ -362,13 +383,18 @@ rb_camera_get_support_formats(VALUE self)
     if (err) break;
 
     fmt = rb_obj_alloc(fmt_desc_klass);
-    fcc = rb_sprintf("%c%c%c%c",
-                     desc.pixelformat >>  0 & 0xff,
-                     desc.pixelformat >>  8 & 0xff,
-                     desc.pixelformat >> 16 & 0xff,
-                     desc.pixelformat >> 24 & 0xff);
+    fcc = rb_enc_sprintf(rb_utf8_encoding(),
+                         "%c%c%c%c",
+                         desc.pixelformat >>  0 & 0xff,
+                         desc.pixelformat >>  8 & 0xff,
+                         desc.pixelformat >> 16 & 0xff,
+                         desc.pixelformat >> 24 & 0xff);
+
+    str = rb_enc_str_new_cstr((const char*)desc.description,
+                               rb_utf8_encoding());
+
     rb_ivar_set(fmt, id_iv_fcc, fcc);
-    rb_ivar_set(fmt, id_iv_desc, rb_str_new2(desc.description));
+    rb_ivar_set(fmt, id_iv_desc, str);
     
     rb_ary_push(ret, fmt);
   }
@@ -481,14 +507,32 @@ rb_camera_get_frame_capabilities(VALUE self, VALUE fmt)
 }
 
 static VALUE
-rb_camera_set_control(VALUE self, VALUE id, VALUE val)
+rb_camera_set_control(VALUE self, VALUE id, VALUE _val)
 {
   camera_t* ptr;
   int err;
+  int val;
 
   Data_Get_Struct(self, camera_t, ptr);
 
-  err = camera_set_control(ptr, FIX2INT(id), FIX2INT(val));
+  switch (TYPE(_val)) {
+  case T_TRUE:
+    val = 1;
+    break;
+
+  case T_FALSE:
+    val = 0;
+    break;
+
+  case T_FIXNUM:
+    val = FIX2INT(_val);
+    break;
+
+  default:
+    rb_raise(rb_eTypeError, "invalid type of control value");
+  }
+
+  err = camera_set_control(ptr, FIX2INT(id), val);
   if (err) {
     rb_raise(rb_eRuntimeError, "set control failed.");
   }
@@ -953,8 +997,8 @@ Init_v4l2()
   id_iv_driver  = rb_intern_const("@driver");
   id_iv_bus     = rb_intern_const("@bus");
   id_iv_id      = rb_intern_const("@id");
-  id_iv_min     = rb_intern_const("@max");
-  id_iv_max     = rb_intern_const("@min");
+  id_iv_min     = rb_intern_const("@min");
+  id_iv_max     = rb_intern_const("@max");
   id_iv_step    = rb_intern_const("@step");
   id_iv_default = rb_intern_const("@default");
   id_iv_items   = rb_intern_const("@items");
