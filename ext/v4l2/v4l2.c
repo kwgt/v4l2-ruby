@@ -297,27 +297,49 @@ rb_camera_get_controls(VALUE self)
 }
 
 static VALUE
-get_framerate_list(camera_t* cam, struct v4l2_frmsize_discrete* size)
+get_framerate_list(camera_t* cam,
+                   uint32_t fmt, struct v4l2_frmsize_discrete* size)
 {
   VALUE ret;
   int i;
-
   int err;
   struct v4l2_frmivalenum intval;
   VALUE rate;
+  int num;
+  int deno;
 
   ret = rb_ary_new();
 
   for (i = 0; ; i++) {
-    err = camera_get_frame_rate(cam, V4L2_PIX_FMT_MJPEG,
+    err = camera_get_frame_rate(cam, fmt,
                                 size->width, size->height, i, &intval);
     if (err) break;
 
-    if (intval.type == V4L2_FRMIVAL_TYPE_DISCRETE) {
+    switch (intval.type) {
+    case V4L2_FRMIVAL_TYPE_DISCRETE:
       rate = rb_rational_new(INT2FIX(intval.discrete.denominator),
                              INT2FIX(intval.discrete.numerator));
 
       rb_ary_push(ret, rate);
+      break;
+
+    case V4L2_FRMIVAL_TYPE_CONTINUOUS:
+    case V4L2_FRMIVAL_TYPE_STEPWISE:
+      num  = intval.stepwise.max.numerator;
+      deno = intval.stepwise.max.denominator;
+
+      while (num <= intval.stepwise.min.numerator) {
+        while (deno <= intval.stepwise.min.denominator) {
+          rate = rb_rational_new(INT2FIX(deno), INT2FIX(num));
+          rb_ary_push(ret, rate);
+
+          deno += intval.stepwise.step.denominator;
+        }
+
+        num += intval.stepwise.step.numerator;
+        deno = intval.stepwise.max.denominator;
+      }
+      break;
     }
   }
 
@@ -403,7 +425,8 @@ rb_camera_get_support_formats(VALUE self)
 }
 
 static void
-make_dummy_capabilities(camera_t* ptr, VALUE ary, int max_width, int max_height)
+make_dummy_capabilities(camera_t* ptr, VALUE ary,
+                        uint32_t fmt, int max_width, int max_height)
 {
   struct v4l2_frmsize_discrete dsize;
   VALUE capa;
@@ -419,7 +442,7 @@ make_dummy_capabilities(camera_t* ptr, VALUE ary, int max_width, int max_height)
       capa = rb_obj_alloc(frame_cap_klass);
       rb_ivar_set(capa, id_iv_width, INT2NUM(dsize.width));
       rb_ivar_set(capa, id_iv_height, INT2NUM(dsize.height));
-      rb_ivar_set(capa, id_iv_rate, get_framerate_list(ptr, &dsize));
+      rb_ivar_set(capa, id_iv_rate, get_framerate_list(ptr, fmt, &dsize));
 
       rb_ary_push(ary, capa);
 
@@ -428,7 +451,7 @@ make_dummy_capabilities(camera_t* ptr, VALUE ary, int max_width, int max_height)
       capa = rb_obj_alloc(frame_cap_klass);
       rb_ivar_set(capa, id_iv_width, INT2NUM(dsize.width));
       rb_ivar_set(capa, id_iv_height, INT2NUM(dsize.height));
-      rb_ivar_set(capa, id_iv_rate, get_framerate_list(ptr, &dsize));
+      rb_ivar_set(capa, id_iv_rate, get_framerate_list(ptr, fmt, &dsize));
 
       rb_ary_push(ary, capa);
     }
@@ -446,7 +469,7 @@ make_dummy_capabilities(camera_t* ptr, VALUE ary, int max_width, int max_height)
       capa = rb_obj_alloc(frame_cap_klass);
       rb_ivar_set(capa, id_iv_width, INT2NUM(dsize.width));
       rb_ivar_set(capa, id_iv_height, INT2NUM(dsize.height));
-      rb_ivar_set(capa, id_iv_rate, get_framerate_list(ptr, &dsize));
+      rb_ivar_set(capa, id_iv_rate, get_framerate_list(ptr, fmt, &dsize));
 
       rb_ary_push(ary, capa);
 
@@ -455,7 +478,7 @@ make_dummy_capabilities(camera_t* ptr, VALUE ary, int max_width, int max_height)
       capa = rb_obj_alloc(frame_cap_klass);
       rb_ivar_set(capa, id_iv_width, INT2NUM(dsize.width));
       rb_ivar_set(capa, id_iv_height, INT2NUM(dsize.height));
-      rb_ivar_set(capa, id_iv_rate, get_framerate_list(ptr, &dsize));
+      rb_ivar_set(capa, id_iv_rate, get_framerate_list(ptr, fmt, &dsize));
 
       rb_ary_push(ary, capa);
     }
@@ -463,12 +486,13 @@ make_dummy_capabilities(camera_t* ptr, VALUE ary, int max_width, int max_height)
 }
 
 static VALUE
-rb_camera_get_frame_capabilities(VALUE self, VALUE fmt)
+rb_camera_get_frame_capabilities(VALUE self, VALUE _fmt)
 {
   VALUE ret;
   camera_t* ptr;
   int i;
   int j;
+  uint32_t fmt;
 
   int err;
   struct v4l2_frmsizeenum size;
@@ -477,26 +501,31 @@ rb_camera_get_frame_capabilities(VALUE self, VALUE fmt)
   VALUE list;
   VALUE rate;
 
-  Check_Type(fmt, T_SYMBOL);
+  Check_Type(_fmt, T_SYMBOL);
 
   Data_Get_Struct(self, camera_t, ptr);
 
   ret = rb_ary_new();
+  fmt = to_pixfmt(_fmt);
 
   for (i = 0; ;i++){
-    err = camera_get_frame_size(ptr, to_pixfmt(fmt), i, &size);
+    err = camera_get_frame_size(ptr, fmt, i, &size);
     if (err) break;
 
     if (size.type == V4L2_FRMSIZE_TYPE_DISCRETE) {
       capa = rb_obj_alloc(frame_cap_klass);
+      list = get_framerate_list(ptr, fmt, &size.discrete);
+
       rb_ivar_set(capa, id_iv_width, INT2NUM(size.discrete.width));
       rb_ivar_set(capa, id_iv_height, INT2NUM(size.discrete.height));
-      rb_ivar_set(capa, id_iv_rate, get_framerate_list(ptr, &size.discrete));
+      rb_ivar_set(capa, id_iv_rate, list);
 
       rb_ary_push(ret, capa);
 
     } else if (size.type == V4L2_FRMSIZE_TYPE_STEPWISE) {
-      make_dummy_capabilities(ptr, ret,
+      make_dummy_capabilities(ptr,
+                              ret,
+                              fmt,
                               size.stepwise.max_width,
                               size.stepwise.max_height);
       break;
