@@ -61,7 +61,7 @@
 #define ST_STOPPING               (6)
 #define ST_FINALIZED              (7)
 
-static int xioctl(int fh, int request, void *arg)
+static int xioctl(int fh, unsigned long request, void *arg)
 {
   int r;
 
