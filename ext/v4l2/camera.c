@@ -154,7 +154,7 @@ set_format(int fd, uint32_t fcc, int wd, int ht)
   fmt.fmt.pix.width       = wd;
   fmt.fmt.pix.height      = ht;
   fmt.fmt.pix.pixelformat = fcc;
-  fmt.fmt.pix.field       = V4L2_FIELD_INTERLACED;
+  fmt.fmt.pix.field       = V4L2_FIELD_ANY;
 
   err = xioctl(fd, VIDIOC_S_FMT, &fmt);
   if (err < 0) {
@@ -1378,7 +1378,7 @@ camera_check_busy(camera_t* cam, int* busy)
     fmt.fmt.pix.width       = cam->width;
     fmt.fmt.pix.height      = cam->height;
     fmt.fmt.pix.pixelformat = cam->format;
-    fmt.fmt.pix.field       = V4L2_FIELD_INTERLACED;
+    fmt.fmt.pix.field       = V4L2_FIELD_ANY;
 
     err = xioctl(cam->fd, VIDIOC_S_FMT, &fmt);
     if (err >= 0) {

@@ -23,7 +23,11 @@
 #include <pthread.h>
 #endif /* !defined(RUBY_EXTLIB) */
 
+#ifdef __OpenBSD__
+#include <sys/videoio.h>
+#else
 #include <linux/videodev2.h>
+#endif
 
 #define MAX_PLANE           3
 
@@ -68,13 +72,13 @@ typedef struct __camera__ {
 #ifndef V4L2_CTRL_TYPE_INTEGER_MENU
 #define V4L2_CTRL_TYPE_INTEGER_MENU     9
 struct __v4l2_querymenu_substitute_ {
-  __u32   id;
-  __u32   index;
+  uint32_t  id;
+  uint32_t  index;
   union {
-    __u8    name[32];
-    __s64   value;
+    uint8_t name[32];
+    int64_t value;
   };
-  __u32   reserved;
+  uint32_t  reserved;
 }  __attribute__ ((packed));
 
 #define v4l2_querymenu  __v4l2_querymenu_substitute_
