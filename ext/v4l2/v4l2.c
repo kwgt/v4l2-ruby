@@ -15,6 +15,8 @@
 
 #define N(x)                            (sizeof((x))/sizeof(*(x)))
 
+#define EQ_STR(val,str)                 (rb_to_id(val) == rb_intern(str))
+
 extern rb_encoding* rb_utf8_encoding(void);
 extern rb_encoding* rb_default_internal_encoding(void);
 
@@ -29,14 +31,6 @@ static VALUE menu_item_klass;
 static VALUE frame_cap_klass;
 static VALUE fmt_desc_klass;
 
-static ID id_yuyv;
-static ID id_yuv422;
-static ID id_nv21;
-static ID id_nv12;
-static ID id_nv16;
-static ID id_rgb565;
-static ID id_mjpeg;
-static ID id_h264;
 static ID id_iv_name;
 static ID id_iv_driver;
 static ID id_iv_bus;
@@ -53,6 +47,21 @@ static ID id_iv_rate;
 static ID id_iv_fcc;
 static ID id_iv_desc;
 
+static void rb_camera_free(void* ptr);
+static size_t rb_camera_size(const void* ptr);
+
+static const rb_data_type_t camera_data_type = {
+  "V4L2 for ruby",                      // wrap_struct_name
+  NULL,                                 // function.dmark
+  rb_camera_free,                       // function.dfree
+  rb_camera_size,                       // function.dsize
+  NULL,                                 // function.dcompact
+  NULL,                                 // reserved[0]
+  NULL,                                 // parent
+  NULL,                                 // data
+  (VALUE)RUBY_TYPED_FREE_IMMEDIATELY    // flags
+};
+
 static void
 rb_camera_free(void* ptr)
 {
@@ -63,12 +72,18 @@ rb_camera_free(void* ptr)
   free( ptr);
 }
 
+static size_t
+rb_camera_size(const void* ptr)
+{
+  return sizeof(camera_t);
+}
+
 static VALUE
 rb_camera_alloc(VALUE self)
 {
   camera_t* ptr;
 
-  return Data_Make_Struct(camera_klass, camera_t, 0, rb_camera_free, ptr);
+  return TypedData_Make_Struct(camera_klass, camera_t, &camera_data_type, ptr);
 }
 
 static VALUE
@@ -96,7 +111,7 @@ rb_camera_initialize(VALUE self, VALUE dev)
   /*
    * strip object
    */
-  Data_Get_Struct(self, camera_t, ptr);
+  TypedData_Get_Struct(self, camera_t, &camera_data_type, ptr);
 
   /*
    * initialize struct
@@ -111,8 +126,10 @@ rb_camera_initialize(VALUE self, VALUE dev)
    */
   rb_ivar_set(self, id_iv_name,
               rb_enc_str_new_cstr(ptr->name, rb_utf8_encoding()));
+
   rb_ivar_set(self, id_iv_driver,
               rb_enc_str_new_cstr(ptr->driver, rb_utf8_encoding()));
+
   rb_ivar_set(self, id_iv_bus,
               rb_enc_str_new_cstr(ptr->bus, rb_utf8_encoding()));
 
@@ -124,19 +141,34 @@ rb_camera_close( VALUE self)
 {
   int err;
   camera_t* ptr;
+  int ready;
 
   /*
    * strip object
    */
-  Data_Get_Struct(self, camera_t, ptr);
+  TypedData_Get_Struct(self, camera_t, &camera_data_type, ptr);
 
   /*
-   * convert
+   * do close
    */
-  err = camera_finalize(ptr);
-  if (err) {
-    rb_raise(rb_eRuntimeError, "finalize camera context failed.");
-  }
+  do {
+    err = camera_check_ready(ptr, &ready);
+    if (err) {
+      rb_raise(rb_eRuntimeError, "camera_check_ready() failed.");
+    }
+
+    if (ready) {
+      err = camera_stop(ptr);
+      if (err) {
+        rb_raise(rb_eRuntimeError, "camera_stop() failed.");
+      }
+    }
+
+    err = camera_finalize(ptr);
+    if (err) {
+      rb_raise(rb_eRuntimeError, "finalize camera context failed.");
+    }
+  } while (0);
 
   return Qnil;
 }
@@ -204,9 +236,11 @@ get_control_info(camera_t* ptr, int ctrl)
   VALUE name;
   int err; 
   struct v4l2_queryctrl info;
+  VALUE list;
 
   ret = Qnil;
   err = camera_get_control_info(ptr, ctrl, &info);
+
   if (!err) {
       switch (info.type) {
       case V4L2_CTRL_TYPE_INTEGER:
@@ -236,24 +270,24 @@ get_control_info(camera_t* ptr, int ctrl)
         ret  = rb_obj_alloc(menu_klass);
         name = rb_enc_str_new_cstr((const char*)info.name,
                                    rb_utf8_encoding());
+        list = get_menu_list(ptr, ctrl, info.minimum, info.maximum);
 
         rb_ivar_set(ret, id_iv_name, name);
         rb_ivar_set(ret, id_iv_id, INT2NUM(info.id));
         rb_ivar_set(ret, id_iv_default, INT2FIX(info.default_value));
-        rb_ivar_set(ret, id_iv_items,
-                    get_menu_list(ptr, ctrl, info.minimum, info.maximum));
+        rb_ivar_set(ret, id_iv_items, list);
         break;
 
       case V4L2_CTRL_TYPE_INTEGER_MENU:
         ret  = rb_obj_alloc(menu_klass);
         name = rb_enc_str_new_cstr((const char*)info.name,
                                    rb_utf8_encoding());
+        list = get_int_menu_list(ptr, ctrl, info.minimum, info.maximum);
 
         rb_ivar_set(ret, id_iv_name, name);
         rb_ivar_set(ret, id_iv_id, INT2NUM(info.id));
         rb_ivar_set(ret, id_iv_default, INT2FIX(info.default_value));
-        rb_ivar_set(ret, id_iv_items,
-                    get_int_menu_list(ptr, ctrl, info.minimum, info.maximum));
+        rb_ivar_set(ret, id_iv_items, list);
         break;
 
       default:
@@ -274,7 +308,7 @@ rb_camera_get_controls(VALUE self)
   int i;
   VALUE info;
 
-  Data_Get_Struct(self, camera_t, ptr);
+  TypedData_Get_Struct(self, camera_t, &camera_data_type, ptr);
 
   ret = rb_ary_new();
 
@@ -350,29 +384,35 @@ static uint32_t
 to_pixfmt(VALUE fmt)
 {
   uint32_t ret;
-  ID sym;
 
-  sym = rb_to_id(fmt);
-
-  if (sym == id_yuyv || sym == id_yuv422) {
+  if (EQ_STR(fmt, "YUYV") || EQ_STR(fmt, "YUV422")) {
     ret = V4L2_PIX_FMT_YUYV;
 
-  } else if (sym == id_nv12) {
+  } else if (EQ_STR(fmt, "NV12")) {
     ret = V4L2_PIX_FMT_NV12;
 
-  } else if (sym == id_nv21) {
+  } else if (EQ_STR(fmt, "NV21")) {
     ret = V4L2_PIX_FMT_NV21;
 
-  } else if (sym == id_nv16) {
+  } else if (EQ_STR(fmt, "NV16")) {
     ret = V4L2_PIX_FMT_NV16;
 
-  } else if (sym == id_rgb565) {
+  } else if (EQ_STR(fmt, "YUV420") || EQ_STR(fmt, "YU12")) {
+    ret = V4L2_PIX_FMT_YUV420;
+
+  } else if (EQ_STR(fmt, "YVU420") || EQ_STR(fmt, "YV12")) {
+    ret = V4L2_PIX_FMT_YVU420;
+
+  } else if (EQ_STR(fmt, "NV16")) {
+    ret = V4L2_PIX_FMT_NV16;
+
+  } else if (EQ_STR(fmt, "RGB565") || EQ_STR(fmt, "RGBP")) {
     ret = V4L2_PIX_FMT_RGB565;
 
-  } else if (sym == id_mjpeg) {
+  } else if (EQ_STR(fmt, "MJPEG") || EQ_STR(fmt, "MJPG")) {
     ret = V4L2_PIX_FMT_MJPEG;
 
-  } else if (sym == id_h264) {
+  } else if (EQ_STR(fmt, "H264")) {
     ret = V4L2_PIX_FMT_H264;
 
   } else {
@@ -396,7 +436,7 @@ rb_camera_get_support_formats(VALUE self)
   VALUE fcc;
   VALUE str;
 
-  Data_Get_Struct(self, camera_t, ptr);
+  TypedData_Get_Struct(self, camera_t, &camera_data_type, ptr);
 
   ret = rb_ary_new();
 
@@ -501,9 +541,7 @@ rb_camera_get_frame_capabilities(VALUE self, VALUE _fmt)
   VALUE list;
   VALUE rate;
 
-  Check_Type(_fmt, T_SYMBOL);
-
-  Data_Get_Struct(self, camera_t, ptr);
+  TypedData_Get_Struct(self, camera_t, &camera_data_type, ptr);
 
   ret = rb_ary_new();
   fmt = to_pixfmt(_fmt);
@@ -542,7 +580,7 @@ rb_camera_set_control(VALUE self, VALUE id, VALUE _val)
   int err;
   int val;
 
-  Data_Get_Struct(self, camera_t, ptr);
+  TypedData_Get_Struct(self, camera_t, &camera_data_type, ptr);
 
   switch (TYPE(_val)) {
   case T_TRUE:
@@ -576,7 +614,7 @@ rb_camera_get_control(VALUE self, VALUE id)
   int err;
   int32_t value;
 
-  Data_Get_Struct( self, camera_t, ptr);
+  TypedData_Get_Struct(self, camera_t, &camera_data_type, ptr);
 
   err = camera_get_control(ptr, FIX2INT(id), &value);
   if (err) {
@@ -593,14 +631,9 @@ rb_camera_set_format(VALUE self, VALUE fmt)
   int err;
 
   /*
-   * argument check
-   */
-  Check_Type(fmt, T_SYMBOL);
-
-  /*
    * strip object
    */
-  Data_Get_Struct(self, camera_t, ptr);
+  TypedData_Get_Struct(self, camera_t, &camera_data_type, ptr);
 
   /*
    * set parameter
@@ -623,7 +656,7 @@ rb_camera_get_image_width(VALUE self)
   /*
    * strip object
    */
-  Data_Get_Struct(self, camera_t, ptr);
+  TypedData_Get_Struct(self, camera_t, &camera_data_type, ptr);
 
   /*
    * get parameter
@@ -643,19 +676,14 @@ rb_camera_set_image_width(VALUE self, VALUE val)
   int err;
 
   /*
-   * argument check
-   */
-  Check_Type(val, T_FIXNUM);
-
-  /*
    * strip object
    */
-  Data_Get_Struct(self, camera_t, ptr);
+  TypedData_Get_Struct(self, camera_t, &camera_data_type, ptr);
 
   /*
    * set parameter
    */
-  err = camera_set_image_width(ptr, FIX2INT(val));
+  err = camera_set_image_width(ptr, NUM2INT(val));
   if (err) {
     rb_raise(rb_eRuntimeError, "set image width failed.");
   }
@@ -673,7 +701,7 @@ rb_camera_get_image_height(VALUE self)
   /*
    * strip object
    */
-  Data_Get_Struct(self, camera_t, ptr);
+  TypedData_Get_Struct(self, camera_t, &camera_data_type, ptr);
 
   /*
    * get parameter
@@ -693,19 +721,14 @@ rb_camera_set_image_height(VALUE self, VALUE val)
   int err;
 
   /*
-   * argument check
-   */
-  Check_Type(val, T_FIXNUM);
-
-  /*
    * strip object
    */
-  Data_Get_Struct(self, camera_t, ptr);
+  TypedData_Get_Struct(self, camera_t, &camera_data_type, ptr);
 
   /*
    * set parameter
    */
-  err = camera_set_image_height(ptr, FIX2INT(val));
+  err = camera_set_image_height(ptr, NUM2INT(val));
   if (err) {
     rb_raise(rb_eRuntimeError, "set image height failed.");
   }
@@ -716,7 +739,21 @@ rb_camera_set_image_height(VALUE self, VALUE val)
 static VALUE
 rb_camera_get_framerate(VALUE self)
 {
-  return Qnil;
+  VALUE ret;
+  camera_t* ptr;
+
+  /*
+   * strip object
+   */
+  TypedData_Get_Struct(self, camera_t, &camera_data_type, ptr);
+
+  /*
+   * create return object
+   */
+  ret = rb_rational_new(INT2FIX(ptr->framerate.num),
+                        INT2FIX(ptr->framerate.denom));
+
+  return ret;
 }
 
 static VALUE
@@ -747,13 +784,13 @@ rb_camera_set_framerate(VALUE self, VALUE val)
     break;
   
   default:
-    rb_raise(rb_eArgError, "illeagal framerate value.");
+    rb_raise(rb_eTypeError, "illeagal framerate value.");
   }
 
   /*
    * strip object
    */
-  Data_Get_Struct(self, camera_t, ptr);
+  TypedData_Get_Struct(self, camera_t, &camera_data_type, ptr);
 
   /*
    * set framerate
@@ -775,7 +812,7 @@ rb_camera_state( VALUE self)
   /*
    * strip object
    */
-  Data_Get_Struct(self, camera_t, ptr);
+  TypedData_Get_Struct(self, camera_t, &camera_data_type, ptr);
 
   /*
    * convert state code
@@ -818,21 +855,31 @@ rb_camera_start(VALUE self)
 {
   int err;
   camera_t* ptr;
+  int state;
 
   /*
    * strip object
    */
-  Data_Get_Struct(self, camera_t, ptr);
+  TypedData_Get_Struct(self, camera_t, &camera_data_type, ptr);
 
   /*
-   * convert
+   * do start
    */
   err = camera_start(ptr);
   if (err) {
     rb_raise(rb_eRuntimeError, "start capture failed.");
   }
 
-  return Qnil;
+  /*
+   *
+   */
+  if (rb_block_given_p()) {
+    rb_protect(rb_yield, self, &state);
+    camera_stop(ptr);
+    if (state) rb_jump_tag(state);
+  }
+
+  return self;
 }
 
 static VALUE
@@ -844,7 +891,7 @@ rb_camera_stop(VALUE self)
   /*
    * strip object
    */
-  Data_Get_Struct(self, camera_t, ptr);
+  TypedData_Get_Struct(self, camera_t, &camera_data_type, ptr);
 
   /*
    * convert
@@ -854,7 +901,7 @@ rb_camera_stop(VALUE self)
     rb_raise(rb_eRuntimeError, "stop capture failed.");
   }
 
-  return Qnil;
+  return self;
 }
 
 
@@ -869,7 +916,7 @@ rb_camera_capture(VALUE self)
   /*
    * strip object
    */
-  Data_Get_Struct(self, camera_t, ptr);
+  TypedData_Get_Struct(self, camera_t, &camera_data_type, ptr);
 
   /*
    * allocate return value.
@@ -902,7 +949,7 @@ rb_camera_is_busy(VALUE self)
   /*
    * strip object
    */
-  Data_Get_Struct(self, camera_t, ptr);
+  TypedData_Get_Struct(self, camera_t, &camera_data_type, ptr);
 
   /*
    * do check
@@ -916,6 +963,29 @@ rb_camera_is_busy(VALUE self)
 }
 
 static VALUE
+rb_camera_is_ready(VALUE self)
+{
+  camera_t* ptr;
+  int err;
+  int ready;
+
+  /*
+   * strip object
+   */
+  TypedData_Get_Struct(self, camera_t, &camera_data_type, ptr);
+
+  /*
+   * do check
+   */
+  err = camera_check_ready(ptr, &ready);
+  if (err) {
+    rb_raise(rb_eRuntimeError, "check failed.");
+  }
+
+  return (ready)? Qtrue: Qfalse;
+}
+
+static VALUE
 rb_camera_is_error(VALUE self)
 {
   camera_t* ptr;
@@ -925,7 +995,7 @@ rb_camera_is_error(VALUE self)
   /*
    * strip object
    */
-  Data_Get_Struct(self, camera_t, ptr);
+  TypedData_Get_Struct(self, camera_t, &camera_data_type, ptr);
 
   /*
    * do check
@@ -941,6 +1011,10 @@ rb_camera_is_error(VALUE self)
 void
 Init_v4l2()
 {
+#ifdef HAVE_RB_EXT_RACTOR_SAFE
+  rb_ext_ractor_safe(true);
+#endif /* defined(HAVE_RB_EXT_RACTOR_SAFE) */
+
   rb_require("monitor");
 
   module           = rb_define_module("Video4Linux2");
@@ -968,6 +1042,7 @@ Init_v4l2()
   rb_define_method(camera_klass, "stop", rb_camera_stop, 0);
   rb_define_method(camera_klass, "capture", rb_camera_capture, 0);
   rb_define_method(camera_klass, "busy?", rb_camera_is_busy, 0);
+  rb_define_method(camera_klass, "ready?", rb_camera_is_ready, 0);
   rb_define_method(camera_klass, "error?", rb_camera_is_error, 0);
 
   rb_define_attr(camera_klass, "name", !0, 0);
@@ -980,7 +1055,6 @@ Init_v4l2()
                                           "Control", rb_cObject);
   rb_define_attr(control_klass, "name", !0, 0);
   rb_define_attr(control_klass, "id", !0, 0);
-  rb_define_attr(control_klass, "value", !0, 0);
 
   integer_klass   = rb_define_class_under(camera_klass,
                                           "IntegerControl", control_klass);
@@ -1014,14 +1088,6 @@ Init_v4l2()
   rb_define_attr(fmt_desc_klass, "fcc", !0, 0);
   rb_define_attr(fmt_desc_klass, "description", !0, 0);
 
-  id_yuyv       = rb_intern_const("YUYV");
-  id_yuv422     = rb_intern_const("YUV422");
-  id_nv12       = rb_intern_const("NV12");
-  id_nv21       = rb_intern_const("NV21");
-  id_nv16       = rb_intern_const("NV16");
-  id_rgb565     = rb_intern_const("RGB565");
-  id_mjpeg      = rb_intern_const("MJPEG");
-  id_h264       = rb_intern_const("H264");
   id_iv_name    = rb_intern_const("@name");
   id_iv_driver  = rb_intern_const("@driver");
   id_iv_bus     = rb_intern_const("@bus");

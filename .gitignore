@@ -1,0 +1,5 @@
+.rbenv-gemsets
+.ruby-version
+Gemfile.lock
+pkg/*
+tags

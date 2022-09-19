@@ -113,6 +113,7 @@ extern int camera_set_framerate(camera_t* cam, int num, int denom);
 extern int camera_get_image_size(camera_t* cam, size_t* sz);
 extern int camera_get_image(camera_t* cam, void* ptr, size_t* used);
 extern int camera_check_busy(camera_t* cam, int *busy);
+extern int camera_check_ready(camera_t* cam, int *ready);
 extern int camera_check_error(camera_t* cam, int *error);
 
 extern int camera_get_format_desc(camera_t* cam, int i,

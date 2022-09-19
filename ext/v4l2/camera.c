@@ -1262,8 +1262,15 @@ camera_stop(camera_t* cam)
       for (i = 0; i < NUM_PLANE; i++) mb_discard(cam->mb + i);
 
       cam->fd = open(cam->device, O_RDWR);
-      cam->state  = ST_INITIALIZED;
-      cam->latest = -1;
+      if (cam->fd >= 0) {
+        cam->state  = ST_INITIALIZED;
+        cam->latest = -1;
+
+      } else {
+        cam->state  = ST_ERROR;
+        cam->latest = -1;
+        break;
+      }
 
     } else {
       /*
@@ -1392,6 +1399,36 @@ camera_check_busy(camera_t* cam, int* busy)
     } else {
       perror("ioctl(VIDIOC_S_FMT)");
     }
+  } while(0);
+
+  return ret;
+}
+
+int
+camera_check_ready(camera_t* cam, int* ready)
+{
+  int ret;
+  int err;
+  struct v4l2_format fmt;
+
+  do {
+    /*
+     * entry process
+     */
+    ret = !0;
+
+    /*
+     * check arguments
+     */
+    if (cam == NULL) break;
+    if (ready == NULL) break;
+
+    /*
+     * do check (check state)
+     */
+    *ready = (cam->state == ST_READY);
+
+    ret = 0;
   } while(0);
 
   return ret;

@@ -1,0 +1,5 @@
+target_device:
+  /dev/video0
+
+show_data:
+  false
